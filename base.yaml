@@ -1,0 +1,168 @@
+{{- $architecture := or .architecture "armhf" -}}
+{{- $suite := or .suite "bookworm" -}}
+{{- $image_type := or .image_type "base" -}}
+{{- $hostname := or .hostname "debian" -}}
+{{- $board_name := or .board_name "stm32mp157a-dk1" -}}
+
+{{- $image_format := or .image_format "tarball" -}}
+{{- $imagesize := or .imagesize "3GB" -}}
+{{- $filesystem := or .filesystem "ext4" -}}
+{{- $features := or .features "has_journal" -}}
+{{- $image_compression := or .image_compression "xz" -}}
+{{- $base_imagename := or .base_imagename (printf "%s-%s-%s-%s" $hostname $architecture $suite $image_type) -}}
+{{- $imagename := or .imagename (printf "%s.tar.%s" $base_imagename $image_compression) -}}
+
+{{- $kernel_version := or .kernel_version "6.1.28" -}}
+{{- $kernel_packagename := or .kernel_packagename (printf "linux-image-%s_%s-1_%s.deb" $kernel_version $kernel_version $architecture) -}}
+
+{{- $dtb_filename := or .dtb_filename (printf "%s.dtb" $board_name) -}}
+{{- $fsbl_filename := or .fsbl_filename "tf-a-stm32mp157a-dk1.stm32" -}}
+{{- $fip_filename := or .fip_filename "fip.bin" -}}
+
+{{- $cache_mode := or .cache_mode "unpack" -}}
+{{- $cache_filename := or .image (printf "cache-debian-%s-%s.tar.gz" $suite $architecture) -}}
+
+architecture: {{ $architecture }}
+
+actions:
+{{- if eq $cache_mode "unpack" }}
+  - action: unpack
+    description: Unpack {{ $cache_filename }}
+    file: {{ $cache_filename }}
+    compression: gz
+{{- else }}
+  - action: debootstrap
+    suite: {{ $suite }}
+    components:
+      - main
+    mirror: https://deb.debian.org/debian
+    variant: minbase
+{{- if eq $cache_mode "pack" }}
+  - action: pack
+    description: Pack {{ $cache_filename }}
+    file: {{ $cache_filename }}
+    compression: gz
+{{- end }}
+{{- end }}
+
+  - action: apt
+    description: Install base packages
+    recommends: false
+    packages:
+      - systemd-sysv
+      - i2c-tools
+      - u-boot-tools
+      - udev
+      - isc-dhcp-client
+      - wget
+
+  - action: run
+    description: Set root account
+    chroot: true
+    command: echo "root:root" | chpasswd
+
+  - action: run
+    description: Set host name
+    chroot: true
+    command: echo {{ $hostname }} > /etc/hostname
+
+  - action: overlay
+    description: "Copy linux kernel deb package"
+    source: overlay/linux
+
+  - action: run
+    description: "Installing the linux kernel package into the filesystem"
+    chroot: true
+    command: apt-get -y install /opt/{{ $kernel_packagename }} && rm /opt/{{ $kernel_packagename }}
+
+  - action: overlay
+    description: "Install U-boot file"
+    source: overlay/u-boot
+
+  - action: run
+    description: "Generate boot.scr"
+    chroot: true
+    command: |
+      sed -i \
+        -e "s@#KERNEL_VERSION#@{{ $kernel_version }}@g" \
+        -e "s@#KERNEL_DTB#@{{ $dtb_filename }}@g" \
+        /boot/boot.txt
+      mkimage -T script -A arm -O linux -C none -d /boot/boot.txt /boot/boot.scr
+
+{{ if eq $image_format "tarball" }}
+  - action: pack
+    file: {{ $imagename }}
+    compression: {{ $image_compression }}
+{{ else if eq $image_format "raw" }}
+{{- $imagename = printf "%s.img" $base_imagename }}
+
+  - action: image-partition
+    description: "Creating partitions"
+    imagename: {{ $imagename }}
+    imagesize: {{ $imagesize }}
+    partitiontype: gpt
+    partitions:
+      - name: fsbl1
+        fs: none
+        start: 0%
+        end: 273KiB
+      - name: fsbl2
+        fs: none
+        start: 273KiB
+        end: 529KiB
+      - name: fip
+        fs: none
+        start: 529KiB
+        end: 2577KiB
+      - name: u-boot-env
+        fs: none
+        start: 2577KiB
+        end: 2641KiB
+      - name: ROOTFS
+        fs: {{ $filesystem }}
+        start: 2641KiB
+        end: 100%
+        flags: [ boot ]
+    mountpoints:
+      - mountpoint: /
+        partition: ROOTFS
+        options: [ rw, relatime, errors=remount-ro ]
+        features: [ {{ $features }} ]
+
+  - action: overlay
+    source: overlay/bootloader
+
+  - action: raw
+    description: "Flash FSBL1"
+    origin: filesystem
+    offset: {{ sector 34 }}
+    source: /opt/{{ $fsbl_filename }}
+  - action: raw
+    description: "Flash FSBL2"
+    origin: filesystem
+    offset: {{ sector 546 }}
+    source: /opt/{{ $fsbl_filename }}
+  - action: raw
+    description: "Flash FIP"
+    origin: filesystem
+    offset: {{ sector 1058 }}
+    source: /opt/{{ $fip_filename }}
+
+  - action: run
+    description: "Remove firmware binary"
+    chroot: true
+    command: rm -rf /opt/{{ $fip_filename}} && rm -rf /opt/{{ $fsbl_filename }}
+
+  - action: filesystem-deploy
+    description: "Deploying filesystem onto image"
+
+  - action: run
+    description: "Create a bmap file"
+    postprocess: true
+    command: cd ${ARTIFACTDIR} && bmaptool create {{ $imagename }} > {{ $imagename }}.bmap
+
+  - action: run
+    description: "Compress {{ $imagename }}.img"
+    postprocess: true
+    command: cd ${ARTIFACTDIR} && gzip -f {{ $imagename }}
+{{ end }}

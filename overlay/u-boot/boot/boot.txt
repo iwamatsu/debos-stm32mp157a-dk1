@@ -1,0 +1,13 @@
+setenv bootargs "root=/dev/mmcblk0p5 rootwait console=ttySTM0,115200"
+
+echo "Loading kernel"
+load mmc 0:5 ${kernel_addr_r} /boot/vmlinuz-#KERNEL_VERSION#
+
+echo "Loading device tree"
+load mmc 0:5 ${fdt_addr_r} /usr/lib/linux-image-#KERNEL_VERSION#/#KERNEL_DTB#
+
+#echo "Loading initramfs"
+#load mmc 0:5 ${ramdisk_addr_r} /boot/initrd.img-#KERNEL_VERSION#
+
+echo "Booting kernel"
+bootz ${kernel_addr_r} - ${fdt_addr_r}
