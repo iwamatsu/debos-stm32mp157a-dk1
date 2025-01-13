@@ -130,7 +130,6 @@ build/optee_os-$(OPTEE_VERSION)/patched-stamp:
 	done
 	touch build/optee_os-$(OPTEE_VERSION)/patched-stamp
 patch-optee: expand-optee build/optee_os-$(OPTEE_VERSION)/patched-stamp
-	echo $@
 
 build-optee: patch-optee
 	make -C build/optee_os-$(OPTEE_VERSION)/ \
