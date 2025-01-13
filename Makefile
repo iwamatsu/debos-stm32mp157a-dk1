@@ -150,6 +150,8 @@ build-optee: patch-optee
 			out/firmware/optee_os-$(OPTEE_VERSION)/. ; \
 	done
 
+$(OPTEE_BIN): build-optee
+
 # ATF
 downloads/v$(ATF_VERSION).tar.gz:
 	@test -f $@ || wget $(ATF_DOWNLOAD_URL) -O $@
